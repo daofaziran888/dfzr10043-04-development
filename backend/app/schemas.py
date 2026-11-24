@@ -29,3 +29,9 @@ class EntryPayload(BaseModel):
 class ActionPayload(BaseModel):
     action: str
     remark: str | None = None
+
+
+class BatchTrialPayload(BaseModel):
+    """批量试算入参：整批采集记录，dict 记录或裸值均可。"""
+    records: list[Any] = Field(default_factory=list)
+    source_field: str | None = None

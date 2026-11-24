@@ -3,6 +3,8 @@
 每条链路从上游模块取输入数据，做领域校验、转换与状态推进后，把产物写入下游模块：
 链路1  流程模板发布 → 排程触发 → 任务队列派发 → 机器人节点执行 → 步骤轨迹
 链路2  文件归集校验 → 采集批次确认 → 字段映射生效 → 数据落库 → 交接包消费
+链路2b 采集记录整批转换 → 数据落库回执（映射版本登记）→ 交接清单回写，
+        写入中断后恢复时由单一映射版本完整复算，历史依据保留
 链路3  凭据轮换 → 审计轨迹
 链路4  异常规则匹配 → 重试策略执行 → 审计轨迹
 链路5  元素定位漂移 → 流程执行异常 → 异常规则匹配
@@ -254,6 +256,139 @@ def collect_files_and_land_data(run_id: int, file_payloads: list[dict[str, Any]]
         "handoff_id": handoff_result["id"],
         "conflict_rows": conflict_rows,
         "watermark": watermark,
+    }
+
+
+# ── 链路2b: 采集记录整批转换 → 数据落库回执 → 交接清单回写 ─
+
+def land_records_with_mapping(mapping_id: int, records: list[dict[str, Any]],
+                              *, batch_id: int | None = None,
+                              source_field: str | None = None,
+                              fail_after: int | None = None,
+                              target_storage: str = "datalake_rpa_collect",
+                              target_system: str = "datalake_downstream") -> dict[str, Any]:
+    """采集记录整批转换落库：映射批量转换 → 落库回执 → 交接清单回写。
+
+    - 整批记录按映射当前版本过同一套转换口径，判定明细落交接明细；
+    - 落库按实际转换成功的行写回执，并登记实际使用的映射版本；
+    - fail_after 模拟写入中断：已落库部分保留为历史依据，交接包留在
+      待打包，等 resume_interrupted_landing 恢复后单版本复算再回写。
+    """
+    mapping_svc = service_for("field_mapping")
+    mapping = _find_entry("field_mapping", mapping_id)
+    if mapping.get("status") != "已生效":
+        mapping_svc.run_action(mapping_id, "提交试算")
+        mapping_svc.run_action(mapping_id, "生效映射")
+
+    # 采集批次：复用已确认批次或按记录数新建
+    batch_svc = service_for("capture_batch")
+    if batch_id is not None:
+        batch = _find_entry("capture_batch", batch_id)
+    else:
+        batch_values = {
+            "批次编号": f"CAPT-M{mapping_id}-{_epoch_ms() % 100000}",
+            "关联执行": f"MAPPING-{mapping_id}",
+            "记录行数": str(len(records)),
+            "采集窗口": f"[{_now_iso()[:10]}]",
+            "完整性校验": _checksum(repr(records)),
+            "批次标签": "mapping-landing",
+            "上游来源": f"field_mapping:{mapping_id}",
+            "生成时间": _now_iso(),
+        }
+        batch, _ = batch_svc.create_entry(batch_values)
+        batch_svc.run_action(batch["id"], "启动校验")
+        batch_svc.run_action(batch["id"], "确认批次")
+
+    # 落库记录（含实际映射版本登记）
+    landing_svc = service_for("data_landing")
+    landing_values = {
+        "落库编号": f"LAND-M{mapping_id}-{_epoch_ms() % 100000}",
+        "关联批次": batch.get("批次编号", ""),
+        "目标存储": target_storage,
+        "写入模式": "upsert",
+        "映射版本": str(mapping.get("映射版本") or ""),
+        "写入行数": "0",
+        "冲突行数": "0",
+        "落库水位": "0",
+        "完成时间": "",
+    }
+    landing, _ = landing_svc.create_entry(landing_values)
+
+    # 交接包先建清单，确认结果待落库完成后回写
+    handoff_svc = service_for("handoff_pack")
+    handoff_values = {
+        "交接编号": f"HAND-M{mapping_id}-{_epoch_ms() % 100000}",
+        "关联批次": batch.get("批次编号", ""),
+        "目标系统": target_system,
+        "清单文件数": "1",
+        "记录行数": "0",
+        "校验摘要": batch.get("完整性校验", ""),
+        "映射版本": "",
+        "交接版本": "v1",
+        "交接时间": _now_iso(),
+    }
+    pack, _ = handoff_svc.create_entry(handoff_values)
+
+    write = landing_svc.write_records(
+        landing["id"], mapping_id, records,
+        source_field=source_field, fail_after=fail_after,
+    )
+    if not write.get("ok"):
+        return write
+    if write.get("status") == "interrupted":
+        return {
+            "status": "interrupted",
+            "batch_id": batch["id"],
+            "landing_id": landing["id"],
+            "handoff_id": pack["id"],
+            "映射版本": write["映射版本"],
+            "written_rows": write["written_rows"],
+            "pending_rows": write["pending_rows"],
+        }
+
+    confirmation = handoff_svc.write_back_confirmation(pack["id"], landing)
+    return {
+        "status": "landed",
+        "batch_id": batch["id"],
+        "landing_id": landing["id"],
+        "handoff_id": pack["id"],
+        "映射版本": write["映射版本"],
+        "receipts": write["receipts"],
+        "details": write["details"],
+        "confirmed_rows": confirmation["confirmed_rows"],
+    }
+
+
+def resume_interrupted_landing(landing_id: int,
+                               mapping_id: int | None = None) -> dict[str, Any]:
+    """恢复中断的落库：单版本完整复算 → 回执 → 回写交接清单。
+
+    已交接的历史依据保留在落库记录的 _write_history；恢复后的交接明细
+    全部由当前映射版本复算，两条记录不会各用一版。
+    """
+    landing_svc = service_for("data_landing")
+    resumed = landing_svc.resume_write(landing_id, mapping_id=mapping_id)
+    if not resumed.get("ok"):
+        return resumed
+    landing = landing_svc.get_entry(landing_id)
+
+    handoff_svc = service_for("handoff_pack")
+    packs, _ = handoff_svc.list_entries(size=10000)
+    pack = next(
+        (p for p in packs if p.get("关联批次") == landing.get("关联批次")), None)
+    confirmation = None
+    if pack is not None:
+        confirmation = handoff_svc.write_back_confirmation(pack["id"], landing)
+
+    return {
+        "status": "resumed",
+        "landing_id": landing_id,
+        "handoff_id": pack["id"] if pack else None,
+        "映射版本": resumed["映射版本"],
+        "receipts": resumed["receipts"],
+        "details": resumed["details"],
+        "history_preserved": resumed["history_preserved"],
+        "confirmed_rows": confirmation["confirmed_rows"] if confirmation else 0,
     }
 
 

@@ -70,3 +70,15 @@ body { margin: 0; background: #f6f8fb; color: #1f2937; }
 .analysis-chart { display: flex; align-items: flex-end; gap: 8px; height: 160px; padding: 12px 0; }
 .analysis-bar { flex: 1; border-radius: 4px 4px 0 0; background: var(--brand); min-width: 24px; position: relative; transition: height 0.4s; }
 .analysis-bar span { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--muted); white-space: nowrap; }
+/* 字段映射批量试算面板 */
+.trial-panel { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.trial-title { margin: 0 0 4px; font-size: 14px; }
+.trial-desc { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.trial-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.trial-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.trial-field select, .trial-field textarea { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; }
+.trial-samples-field { flex: 1; min-width: 220px; }
+.trial-samples-field textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.trial-summary { font-size: 13px; margin: 10px 0 8px; }
+.trial-table tr[data-status="failed"] td { color: #b42318; }
+.trial-table tr[data-status="skipped"] td { color: var(--muted); }

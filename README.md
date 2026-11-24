@@ -80,6 +80,11 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+- 字段映射支持整批转换：`POST /api/field_mapping/{id}/batch-trial` 一次提交整批
+  采集记录，按映射当前版本逐条返回转换/空值跳过/失败明细；落库链路
+  `land_records_with_mapping` → `resume_interrupted_landing` 按实际转换成功的行写
+  回执并登记映射版本，写入中断恢复后由单一映射版本完整复算，历史依据保留在
+  落库记录的 `_write_history`，确认结果回写交接清单供交接方核对。
 
 领域：数据工程
 子方向：数据采集、爬虫与RPA

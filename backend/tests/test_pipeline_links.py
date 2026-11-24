@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.pipeline import (
@@ -270,10 +272,12 @@ class TestDedupDomainLogic:
 
     def test_dedup_by_window_removes_duplicates(self):
         from app.dedup import dedup_by_window
+        # 生成时间取当前时刻，保证落在默认去重窗口内（原为写死日期，随时间滑出窗口）
+        now_iso = datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
         rows = [
-            {"id": 1, "key": "a", "生成时间": "2026-11-21T00:00:00"},
-            {"id": 2, "key": "a", "生成时间": "2026-11-21T00:00:00"},
-            {"id": 3, "key": "b", "生成时间": "2026-11-21T00:00:00"},
+            {"id": 1, "key": "a", "生成时间": now_iso},
+            {"id": 2, "key": "a", "生成时间": now_iso},
+            {"id": 3, "key": "b", "生成时间": now_iso},
         ]
         result = dedup_by_window(rows, ["key"])
         assert len(result) == 2

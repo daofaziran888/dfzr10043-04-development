@@ -37,6 +37,40 @@ export async function runAction(
   return await response.json()
 }
 
+export type BatchTrialItem = {
+  source_id: string
+  input: string | null
+  status: 'converted' | 'skipped' | 'failed'
+  output: string | number | null
+  reason: string
+  '来源字段': string
+  '映射编号': string
+  '映射版本': string
+}
+
+export type BatchTrialResult = {
+  ok: boolean
+  '映射编号': string
+  '映射版本': string
+  total: number
+  converted: number
+  skipped: number
+  failed: number
+  items: BatchTrialItem[]
+}
+
+export async function batchTrial(
+  mappingId: number,
+  records: { source_id: string; value: string | null }[],
+): Promise<BatchTrialResult> {
+  const response = await request(`/api/field_mapping/${mappingId}/batch-trial`, {
+    method: 'POST',
+    body: JSON.stringify({ records }),
+  })
+  if (!response.ok) throw new Error('批量试算请求失败')
+  return await response.json()
+}
+
 export async function downloadEntries(
   key: string,
   filters: Record<string, string> = {},

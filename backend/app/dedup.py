@@ -15,6 +15,11 @@ def sha256_hex(data: str) -> str:
     return hashlib.sha256(data.encode()).hexdigest()[:16]
 
 
+def now_iso() -> str:
+    """东八区当前时间（秒级），供各服务统一打时间戳。"""
+    return datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
+
+
 def fingerprint_row(row: dict[str, Any], fields: list[str]) -> str:
     """为一行采集数据计算指纹（组合字段的判定性校验值）。"""
     payload = "|".join(str(row.get(f, "")) for f in fields)
